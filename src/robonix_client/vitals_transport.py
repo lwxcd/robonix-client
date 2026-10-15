@@ -347,6 +347,12 @@ def aggregate_component_health(
         if match:
             body_health[match] = str(body.get("health") or "unknown")
 
+    body_enabled: dict[str, bool] = {}
+    for body in bodies:
+        for component in body.get("components") or []:
+            if isinstance(component, dict) and component.get("id"):
+                body_enabled[str(component["id"])] = bool(component.get("enabled"))
+
     rows: dict[str, dict[str, Any]] = {}
     for component in components:
         component_id = str(component["id"])
@@ -365,6 +371,21 @@ def aggregate_component_health(
             key=lambda signal: HEALTH_SEVERITY.get(str(signal.get("health")), 0),
             default={},
         )
+        detail = str(worst_signal.get("detail") or "")
+        source_component_id = component_id if direct_values else ""
+        # Components with no scalar telemetry (this deployment's lidar, imu,
+        # camera and audio) would otherwise read "unknown" forever; fall back
+        # to the online/present flag the robot's health source reports for
+        # them in the body component list.
+        if direct_health == "unknown" and component_id in body_enabled:
+            if body_enabled[component_id]:
+                direct_health = "ok"
+                direct_visual_state = "ok"
+            else:
+                direct_health = "error"
+                direct_visual_state = "error"
+                detail = "component reported offline by the robot health source"
+            source_component_id = component_id
         rows[component_id] = {
             "componentId": component_id,
             "health": direct_health,
@@ -372,8 +393,8 @@ def aggregate_component_health(
             "visualState": direct_visual_state,
             "directVisualState": direct_visual_state,
             "signalCount": len(component_signals),
-            "detail": str(worst_signal.get("detail") or ""),
-            "sourceComponentId": component_id if direct_values else "",
+            "detail": detail,
+            "sourceComponentId": source_component_id,
             "signalKeys": [str(signal.get("key") or "") for signal in component_signals],
         }
 
